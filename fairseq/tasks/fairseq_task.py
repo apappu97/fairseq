@@ -131,13 +131,13 @@ class FairseqTask(object):
             indices = dataset.ordered_indices()
 
         # filter examples that are too large
-        indices = data_utils.filter_by_size(
+        indices_post_filter = data_utils.filter_by_size(
             indices, dataset.size, max_positions, raise_exception=(not ignore_invalid_inputs),
         )
 
         # create mini-batches with given size constraints
         batch_sampler = data_utils.batch_by_size(
-            indices, dataset.num_tokens, max_tokens=max_tokens, max_sentences=max_sentences,
+            indices_post_filter, dataset.num_tokens, max_tokens=max_tokens, max_sentences=max_sentences,
             required_batch_size_multiple=required_batch_size_multiple,
         )
 
@@ -151,7 +151,7 @@ class FairseqTask(object):
             shard_id=shard_id,
             num_workers=num_workers,
             epoch=epoch,
-        )
+        ), indices
 
     def build_model(self, args):
         """
