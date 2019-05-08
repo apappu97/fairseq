@@ -128,8 +128,9 @@ class FairseqTask(object):
 
         # get indices ordered by example size
         with data_utils.numpy_seed(seed):
-            indices = dataset.ordered_indices()
+            indices = dataset.ordered_indices(promptranking=True)
 
+        print('ordered indices from lp dataset in fairseq task', indices)
         # filter examples that are too large
         indices_post_filter = data_utils.filter_by_size(
             indices, dataset.size, max_positions, raise_exception=(not ignore_invalid_inputs),

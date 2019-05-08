@@ -23,13 +23,15 @@ Run as:
 python prompt_ranking_fan.py data-bin/writingPrompts1024PromptRanking/
 --path fusion_checkpoint.pt \
   --model-overrides "{'pretrained_checkpoint':'pretrained_checkpoint.pt'}" \
-  --task translation --max-sentences 8 
-
+  --task translation --max-sentences 1 
+  
+Note: MUST RUN WITH 1 for max sentences. Otheriwse ordering of indices and sentences is wrong.
 """
 
 import numpy as np
 import torch
 
+from collections import defaultdict
 from fairseq import options, progress_bar, tasks, utils
 from fairseq.meters import StopwatchMeter, TimeMeter
 from fairseq.sequence_scorer import SequenceScorer
@@ -64,14 +66,34 @@ class WordStat(object):
                                                self.next_word_prob, self.count - self.missing_next_words)
 
 
+def get_sentence(tokens, task, src_or_tgt, diff=None):
+    w = ''
+    is_bpe = False
+
+    if src_or_tgt == 'src':
+        decode_dict = task.source_dictionary
+    elif src_or_tgt == 'tgt':
+        decode_dict = task.target_dictionary
+
+    for i in range(len(tokens)):
+        w_ind = tokens[i].item()
+        if diff is None:
+            w += decode_dict[w_ind] + " "
+        else:
+            w += decode_dict[w_ind] + "({0:.2f})".format(diff[i]) + " "
+
+    return w
+
 def main(parsed_args):
     assert parsed_args.path is not None, '--path required for evaluation!'
+    assert parsed_args.max_sentences == 1 # MUST BE 1, otherwise indices are out of order 
     import_user_module(parsed_args)
     print(parsed_args)
 
     use_cuda = torch.cuda.is_available() and not parsed_args.cpu
 
     task = tasks.setup_task(parsed_args)
+    # true_prompts = determine_true_prompts(parsed_args.prompt_text_path)
 
     # Load ensemble
     print('| loading model(s) from {}'.format(parsed_args.path))
@@ -93,11 +115,15 @@ def main(parsed_args):
         model.make_generation_fast_()
         if args.fp16:
             model.half()
+        if use_cuda:
+            model.cuda()
 
     assert len(models) > 0
 
     print('num. model params: {}'.format(sum(p.numel() for p in models[0].parameters())))
 
+    print('task dataset: {}'.format(task.dataset(args.gen_subset)))
+    
     itr, order_of_indices = task.get_batch_iterator(
         dataset=task.dataset(args.gen_subset),
         max_tokens=args.max_tokens or 36000,
@@ -110,16 +136,13 @@ def main(parsed_args):
         shard_id=args.shard_id,
         num_workers=args.num_workers
     )
-
     itr = itr.next_epoch_itr(shuffle = False)
     gen_timer = StopwatchMeter()
     scorer = SequenceScorer(task.target_dictionary, args.softmax_batch)
     if use_cuda:
-        scorer.cuda()
         device = torch.device("cuda")
     else:
         device = "cpu"
-
 
     if args.remove_bpe is not None:
         bpe_cont = args.remove_bpe.rstrip()
@@ -132,7 +155,6 @@ def main(parsed_args):
     word_stats = dict()
 
     prompt_ranking_scores = []
-
     curr_index = 0
     with progress_bar.build_progress_bar(args, itr) as t:
         wps_meter = TimeMeter()
@@ -142,13 +164,14 @@ def main(parsed_args):
                 continue
 
             sample = utils.move_to_cuda(sample) if use_cuda else sample
-
             gen_timer.start()
             hypos = scorer.generate(models, sample)
             gen_timer.stop(sample['ntokens'])
 
-            if len(prompt_ranking_scores) == 20: break #debug cruft so we can examine locally
-            for hypos_i in hypos:
+            # if len(prompt_ranking_scores) > 20: #debug cruft so we can examine locally
+            #     print('breaking')
+            #     break 
+            for i, hypos_i in enumerate(hypos):
                 hypo = hypos_i[0]
                 pos_scores = hypo['positional_scores']
 
@@ -165,9 +188,14 @@ def main(parsed_args):
                     print('| Skipping tokens with inf scores:',
                         task.target_dictionary.string(hypo['tokens'][inf_scores.nonzero()]))
                     pos_scores = pos_scores[(~inf_scores).nonzero()]
-                print("pos scores: len: {} values: {}".format(len(pos_scores), pos_scores))
                 curr_score = pos_scores.sum().to(device)
                 prompt_ranking_scores.append((order_of_indices[curr_index], curr_score.item()))
+
+                # sent = get_sentence(hypo['tokens'], task, 'tgt')
+                # prompt = get_sentence(sample['net_input']['src_tokens'][i], task, 'src')
+
+                # print('curr prompt idx: {} and prompt: {}'.format(order_of_indices[curr_index], prompt))
+                # print('curr sent idx {} and curr sent {}'.format(order_of_indices[curr_index], sent))
                 curr_index+=1
 
                 if args.output_word_probs or args.output_word_stats:
@@ -202,17 +230,20 @@ def main(parsed_args):
 
     print('curr index is: {}'.format(curr_index))
     # TODO -- uncomment these useful assert statements 
-    # assert curr_index == NUM_STORIES * (NUM_FAKE_PROMPTS + 1)
+    assert curr_index == NUM_STORIES * (NUM_FAKE_PROMPTS + 1)
     print('len of prompt ranking scores is {} and values {}'.format(len(prompt_ranking_scores), prompt_ranking_scores))
-    # assert len(prompt_ranking_scores) == NUM_STORIES * (NUM_FAKE_PROMPTS + 1)
+
+    assert len(prompt_ranking_scores) == NUM_STORIES * (NUM_FAKE_PROMPTS + 1)
 
     # Process prompt ranking scores to get actual score now 
     ordered_prompt_ranking_scores = sorted(prompt_ranking_scores, key=lambda x: x[0])
-    print('ordered prompt ranking scores', ordered_prompt_ranking_scores)
+
+    print('ordered prompt ranking scores: {}'.format(ordered_prompt_ranking_scores))
+
     recovered_indices = [x[0] for x in ordered_prompt_ranking_scores]
     print('recovered_indices: {}'.format(recovered_indices))
     print('sanity check assert on recovered indices. Asserting now: ')
-    # assert np.all(recovered_indices == np.arange(0, NUM_STORIES * (NUM_FAKE_PROMPTS + 1)))
+    assert np.all(recovered_indices == np.arange(0, NUM_STORIES * (NUM_FAKE_PROMPTS + 1)))
 
     just_probabilities = [x[1] for x in ordered_prompt_ranking_scores]
 
@@ -220,12 +251,14 @@ def main(parsed_args):
     for i in range(0, len(just_probabilities), 10): 
         curr_vals = np.array(just_probabilities[i: i + 10])
         max_val_idx = np.argmax(curr_vals)
+        print('curr vals {} and max val idx {}'.format(curr_vals, max_val_idx))
         final_bool_results.append(max_val_idx == 0)
 
+    print("final bool results {}".format(final_bool_results))
     print("Sum of final bool accuracies: {} Len of final bool accuracies {}".format(sum(final_bool_results), len(final_bool_results)))
     final_accuracy = sum(final_bool_results)/len(final_bool_results)
     print('Final Accuracy for Prompt Ranking Task on Fan is: {}'.format(final_accuracy))
-    with open(args.data[0] + '_fan_prompt_ranking_accuracy.txt', 'w') as f:
+    with open(args.data + '_fan_prompt_ranking_accuracy.txt', 'w') as f:
         f.write('Final Accuracy for Fan Prompt Ranking Task is: {}'.format(final_accuracy))
 
     if args.output_word_stats:
