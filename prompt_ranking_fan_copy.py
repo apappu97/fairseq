@@ -30,6 +30,7 @@ Note: MUST RUN WITH 1 for max sentences. Otheriwse ordering of indices and sente
 
 import numpy as np
 import torch
+import pickle 
 
 from collections import defaultdict
 from fairseq import options, progress_bar, tasks, utils
@@ -155,6 +156,8 @@ def main(parsed_args):
     word_stats = dict()
 
     prompt_ranking_scores = []
+    prompts_w_indices = []
+    sents_w_indices = []
     curr_index = 0
     with progress_bar.build_progress_bar(args, itr) as t:
         wps_meter = TimeMeter()
@@ -191,9 +194,11 @@ def main(parsed_args):
                 curr_score = pos_scores.sum().to(device)
                 prompt_ranking_scores.append((order_of_indices[curr_index], curr_score.item()))
 
-                # sent = get_sentence(hypo['tokens'], task, 'tgt')
-                # prompt = get_sentence(sample['net_input']['src_tokens'][i], task, 'src')
+                sent = get_sentence(hypo['tokens'], task, 'tgt')
+                prompt = get_sentence(sample['net_input']['src_tokens'][i], task, 'src')
 
+                sents_w_indices.append((order_of_indices[curr_index], sent))
+                prompts_w_indices.append((order_of_indices[curr_index], prompt))
                 # print('curr prompt idx: {} and prompt: {}'.format(order_of_indices[curr_index], prompt))
                 # print('curr sent idx {} and curr sent {}'.format(order_of_indices[curr_index], sent))
                 curr_index+=1
@@ -237,8 +242,21 @@ def main(parsed_args):
 
     # Process prompt ranking scores to get actual score now 
     ordered_prompt_ranking_scores = sorted(prompt_ranking_scores, key=lambda x: x[0])
+    ordered_sents_w_indices = sorted(sents_w_indices, key=lambda x: x[0])
+    ordered_prompts_w_indices = sorted(prompts_w_indices, key=lambda x: x[0])
 
     print('ordered prompt ranking scores: {}'.format(ordered_prompt_ranking_scores))
+
+    # These pickles aren't necessary, mostly for debugging ordering
+
+    with open('ordered_prompt_ranking_scores.pkl', 'wb') as hand:
+        pickle.dump(ordered_prompt_ranking_scores, hand)
+
+    with open('ordered_sents_w_indices.pkl', 'wb') as handle:
+        pickle.dump(ordered_sents_w_indices, handle)
+
+    with open('ordered_prompts_w_indices.pkl', 'wb') as handle2:
+        pickle.dump(ordered_prompts_w_indices, handle2)
 
     recovered_indices = [x[0] for x in ordered_prompt_ranking_scores]
     print('recovered_indices: {}'.format(recovered_indices))
