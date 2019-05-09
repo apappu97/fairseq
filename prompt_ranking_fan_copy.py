@@ -233,10 +233,9 @@ def main(parsed_args):
             wps_meter.update(sample['ntokens'])
             t.log({'wps': round(wps_meter.avg)})
 
-    print('curr index is: {}'.format(curr_index))
     # TODO -- uncomment these useful assert statements 
     assert curr_index == NUM_STORIES * (NUM_FAKE_PROMPTS + 1)
-    print('len of prompt ranking scores is {} and values {}'.format(len(prompt_ranking_scores), prompt_ranking_scores))
+    # print('len of prompt ranking scores is {} and values {}'.format(len(prompt_ranking_scores), prompt_ranking_scores))
 
     assert len(prompt_ranking_scores) == NUM_STORIES * (NUM_FAKE_PROMPTS + 1)
 
@@ -245,10 +244,9 @@ def main(parsed_args):
     ordered_sents_w_indices = sorted(sents_w_indices, key=lambda x: x[0])
     ordered_prompts_w_indices = sorted(prompts_w_indices, key=lambda x: x[0])
 
-    print('ordered prompt ranking scores: {}'.format(ordered_prompt_ranking_scores))
+    print('Ordered prompt ranking scores: {}'.format(ordered_prompt_ranking_scores))
 
-    # These pickles aren't necessary, mostly for debugging ordering
-
+    # These pickles aren't necessary, mostly for inspecting ordering
     with open('ordered_prompt_ranking_scores.pkl', 'wb') as hand:
         pickle.dump(ordered_prompt_ranking_scores, hand)
 
@@ -259,7 +257,6 @@ def main(parsed_args):
         pickle.dump(ordered_prompts_w_indices, handle2)
 
     recovered_indices = [x[0] for x in ordered_prompt_ranking_scores]
-    print('recovered_indices: {}'.format(recovered_indices))
     print('sanity check assert on recovered indices. Asserting now: ')
     assert np.all(recovered_indices == np.arange(0, NUM_STORIES * (NUM_FAKE_PROMPTS + 1)))
 
@@ -272,8 +269,8 @@ def main(parsed_args):
         print('curr vals {} and max val idx {}'.format(curr_vals, max_val_idx))
         final_bool_results.append(max_val_idx == 0)
 
-    print("final bool results {}".format(final_bool_results))
-    print("Sum of final bool accuracies: {} Len of final bool accuracies {}".format(sum(final_bool_results), len(final_bool_results)))
+    print("Final boolean results {}".format(final_bool_results))
+    print("Sum of final boolean accuracies: {} Len of final bool accuracies {}".format(sum(final_bool_results), len(final_bool_results)))
     final_accuracy = sum(final_bool_results)/len(final_bool_results)
     print('Final Accuracy for Prompt Ranking Task on Fan is: {}'.format(final_accuracy))
     with open(args.data + '_fan_prompt_ranking_accuracy.txt', 'w') as f:
