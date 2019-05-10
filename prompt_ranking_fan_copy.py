@@ -125,7 +125,7 @@ def main(parsed_args):
 
     print('task dataset: {}'.format(task.dataset(args.gen_subset)))
     
-    itr, order_of_indices = task.get_batch_iterator(
+    itr = task.get_batch_iterator(
         dataset=task.dataset(args.gen_subset),
         max_tokens=args.max_tokens or 36000,
         max_sentences=args.max_sentences,
@@ -135,9 +135,10 @@ def main(parsed_args):
         ignore_invalid_inputs=True,
         num_shards=args.num_shards,
         shard_id=args.shard_id,
-        num_workers=args.num_workers
-    )
-    itr = itr.next_epoch_itr(shuffle = False)
+        num_workers=args.num_workers,
+        sort_by_length = False
+    ).next_epoch_itr(shuffle = False)
+
     gen_timer = StopwatchMeter()
     scorer = SequenceScorer(task.target_dictionary, args.softmax_batch)
     if use_cuda:
@@ -156,8 +157,6 @@ def main(parsed_args):
     word_stats = dict()
 
     prompt_ranking_scores = []
-    prompts_w_indices = []
-    sents_w_indices = []
     curr_index = 0
     with progress_bar.build_progress_bar(args, itr) as t:
         wps_meter = TimeMeter()
@@ -171,9 +170,6 @@ def main(parsed_args):
             hypos = scorer.generate(models, sample)
             gen_timer.stop(sample['ntokens'])
 
-            # if len(prompt_ranking_scores) > 20: #debug cruft so we can examine locally
-            #     print('breaking')
-            #     break 
             for i, hypos_i in enumerate(hypos):
                 hypo = hypos_i[0]
                 pos_scores = hypo['positional_scores']
@@ -192,15 +188,13 @@ def main(parsed_args):
                         task.target_dictionary.string(hypo['tokens'][inf_scores.nonzero()]))
                     pos_scores = pos_scores[(~inf_scores).nonzero()]
                 curr_score = pos_scores.sum().to(device)
-                prompt_ranking_scores.append((order_of_indices[curr_index], curr_score.item()))
+                prompt_ranking_scores.append((curr_index, curr_score.item()))
 
                 sent = get_sentence(hypo['tokens'], task, 'tgt')
                 prompt = get_sentence(sample['net_input']['src_tokens'][i], task, 'src')
 
-                sents_w_indices.append((order_of_indices[curr_index], sent))
-                prompts_w_indices.append((order_of_indices[curr_index], prompt))
-                # print('curr prompt idx: {} and prompt: {}'.format(order_of_indices[curr_index], prompt))
-                # print('curr sent idx {} and curr sent {}'.format(order_of_indices[curr_index], sent))
+                print('curr prompt idx: {} and prompt: {}'.format(curr_index, prompt))
+                print('curr sent idx {} and curr sent {}'.format(curr_index, sent))
                 curr_index+=1
 
                 if args.output_word_probs or args.output_word_stats:
@@ -233,34 +227,11 @@ def main(parsed_args):
             wps_meter.update(sample['ntokens'])
             t.log({'wps': round(wps_meter.avg)})
 
-    # TODO -- uncomment these useful assert statements 
-    assert curr_index == NUM_STORIES * (NUM_FAKE_PROMPTS + 1)
-    # print('len of prompt ranking scores is {} and values {}'.format(len(prompt_ranking_scores), prompt_ranking_scores))
-
-    assert len(prompt_ranking_scores) == NUM_STORIES * (NUM_FAKE_PROMPTS + 1)
-
     # Process prompt ranking scores to get actual score now 
-    ordered_prompt_ranking_scores = sorted(prompt_ranking_scores, key=lambda x: x[0])
-    ordered_sents_w_indices = sorted(sents_w_indices, key=lambda x: x[0])
-    ordered_prompts_w_indices = sorted(prompts_w_indices, key=lambda x: x[0])
 
-    print('Ordered prompt ranking scores: {}'.format(ordered_prompt_ranking_scores))
+    print('Ordered prompt ranking scores: {}'.format(prompt_ranking_scores))
 
-    # These pickles aren't necessary, mostly for inspecting ordering
-    with open('ordered_prompt_ranking_scores.pkl', 'wb') as hand:
-        pickle.dump(ordered_prompt_ranking_scores, hand)
-
-    with open('ordered_sents_w_indices.pkl', 'wb') as handle:
-        pickle.dump(ordered_sents_w_indices, handle)
-
-    with open('ordered_prompts_w_indices.pkl', 'wb') as handle2:
-        pickle.dump(ordered_prompts_w_indices, handle2)
-
-    recovered_indices = [x[0] for x in ordered_prompt_ranking_scores]
-    print('sanity check assert on recovered indices. Asserting now: ')
-    assert np.all(recovered_indices == np.arange(0, NUM_STORIES * (NUM_FAKE_PROMPTS + 1)))
-
-    just_probabilities = [x[1] for x in ordered_prompt_ranking_scores]
+    just_probabilities = [x[1] for x in prompt_ranking_scores]
 
     final_bool_results = []
     for i in range(0, len(just_probabilities), 10): 

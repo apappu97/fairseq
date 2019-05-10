@@ -195,12 +195,9 @@ class LanguagePairDataset(FairseqDataset):
         filtering a dataset with ``--max-positions``."""
         return (self.src_sizes[index], self.tgt_sizes[index] if self.tgt_sizes is not None else 0)
 
-    def ordered_indices(self, promptranking=False):
+    def ordered_indices(self):
         """Return an ordered list of indices. Batches will be constructed based
         on this order."""
-        if promptranking:
-            self.shuffle = False
-        print('Shuffle in LanguagePair Dataset', self.shuffle)
 
         if self.shuffle:
             indices = np.random.permutation(len(self))
